@@ -1,0 +1,18 @@
+# Python 虚拟环境（1.3G，绝不入库；用户跑 install.command 自己建）
+.venv/
+venv/
+
+# 缓存 / 构建产物
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+
+# 本机工具配置
+.claude/
+.DS_Store
+
+# 运行期数据（实际在 ~/Library/Application Support/LiveTranslator，这里兜底）
+records/
+*.log
