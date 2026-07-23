@@ -23,7 +23,7 @@ OPTIONS = {
     "plist": {
         "CFBundleName": "LiveTranslator",
         "CFBundleDisplayName": "本地实时翻译",
-        "CFBundleIdentifier": "com.tongyuan.livetranslator",
+        "CFBundleIdentifier": "com.livetranslator.app",
         "CFBundleShortVersionString": "0.1.0",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
