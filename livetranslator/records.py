@@ -17,10 +17,15 @@
 可提示恢复。空会议结束时整目录删除，不留孤儿。
 """
 
+from __future__ import annotations
+
 import datetime
 import json
+import os
 import queue
+import re
 import shutil
+import tempfile
 import sys
 import threading
 import time
@@ -30,14 +35,16 @@ from pathlib import Path
 import numpy as np
 
 # 源标签 → 文件名 slug（避免中文文件名带来的跨平台坑）
-_SRC_SLUG = {"麦克风": "mic", "媒体": "media"}
+_SRC_SLUG = {"麦克风": "mic", "媒体": "media", "导入": "import"}
 
 # transcript / 重写时持久化的字段
-_ROW_KEYS = ("id", "t_start", "t_end", "speaker", "lang", "source", "translation")
+_ROW_KEYS = ("id", "time", "t_start", "t_end", "speaker", "src", "lang", "source", "translation",
+             "starred", "edited")
+_ID_RE = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
 
 
 def _slug(label: str) -> str:
-    return _SRC_SLUG.get(label) or ("".join(c for c in label if c.isalnum()) or "src")
+    return _SRC_SLUG.get(label) or ("".join(c for c in label if c.isascii() and c.isalnum()) or "src")
 
 
 class _WavWriter:
@@ -80,8 +87,17 @@ class Record:
     """一场会议的可写记录。线程安全：音频写盘线程与识别线程并发访问。"""
 
     def __init__(self, root, translate_mode: str, app: str = ""):
-        self.id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.root = Path(root)
+        (self.root / "records").mkdir(parents=True, exist_ok=True)
+        self.id, n = base, 1
+        while True:                       # 同一秒内连开两场（或会议+导入）：原子建目录，撞了加后缀
+            try:
+                (self.root / "records" / self.id).mkdir(exist_ok=False)
+                break
+            except FileExistsError:
+                n += 1
+                self.id = f"{base}-{n}"
         self.dir = self.root / "records" / self.id
         (self.dir / "audio").mkdir(parents=True, exist_ok=True)
         self.start_perf = time.time()
@@ -101,7 +117,10 @@ class Record:
             "translate_mode": translate_mode,
             "speakers": [],         # [{local_id, name, global_id}]
             "summary_status": "recording",
-            "summary_template": "通用",
+            "summary_template": "",
+            "entry_count": 0,
+            "starred_count": 0,
+            "langs": [],
         }
         self._write_meta()
 
@@ -120,7 +139,8 @@ class Record:
                 w = _WavWriter(self.dir / "audio" / fn, rate)
                 self._writers[label] = w
                 self.meta["sources"].append(
-                    {"label": label, "wav": f"audio/{fn}", "sample_rate": rate})
+                    {"label": label, "wav": f"audio/{fn}", "sample_rate": rate,
+                     "offset": round(self.offset(), 3)})   # 该音轨相对会议起点的起始偏移
                 self._write_meta()
             w.write(block)
 
@@ -146,18 +166,20 @@ class Record:
             for w in self._writers.values():
                 w.close()
             if entries is not None:
-                with self._tr_path.open("w", encoding="utf-8") as f:
-                    for e in entries:
-                        row = {k: e.get(k) for k in _ROW_KEYS}
-                        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                write_transcript(self.dir, entries)       # 原子替换：重写途中崩溃也不丢逐条日志
             if self._emb:
-                np.savez_compressed(
-                    self.dir / "embeddings.npz",
-                    **{k: np.asarray(v, dtype=np.float32) for k, v in self._emb.items()})
+                save_embeddings(self.dir, self._emb)
             if title:
                 self.meta["title"] = title
+            if entries is not None:
+                self.meta.update(_entry_stats(entries))
             self.meta["duration_s"] = round(self.offset(), 1)
             self.meta["summary_status"] = summary_status
+            self._write_meta()
+
+    def set_meta(self, **kw):
+        with self._lock:
+            self.meta.update(kw)
             self._write_meta()
 
     def write_summary(self, text: str):
@@ -180,8 +202,54 @@ class Record:
             pass
 
     def _write_meta(self):
-        (self.dir / "meta.json").write_text(
-            json.dumps(self.meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json(self.dir / "meta.json", self.meta)
+
+
+# 记录目录里的读-改-写（meta / transcript）统一串行：会议收尾、纪要任务、界面改名可能同时发生
+_io_lock = threading.RLock()
+
+
+def _atomic_write(path: Path, text: str):
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_json(path: Path, data):
+    with _io_lock:
+        _atomic_write(path, json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def save_embeddings(rec_dir, embs: dict):
+    d = Path(rec_dir)
+    fd, tmp = tempfile.mkstemp(dir=str(d), prefix=".emb.", suffix=".npz")
+    os.close(fd)
+    np.savez_compressed(tmp, **{str(k): np.asarray(v, dtype=np.float32) for k, v in embs.items()})
+    os.replace(tmp, d / "embeddings.npz")
+
+
+def _entry_stats(entries) -> dict:
+    langs = []
+    for e in entries:
+        lg = e.get("lang")
+        if lg and lg not in langs:
+            langs.append(lg)
+    spk = []
+    for e in entries:
+        s = e.get("speaker")
+        if s and s not in spk:
+            spk.append(s)
+    return {"entry_count": len(entries),
+            "starred_count": sum(1 for e in entries if e.get("starred")),
+            "langs": langs, "speaker_names": spk[:20]}
 
 
 def audio_writer_worker(record_queue: "queue.Queue", stop_flag: "threading.Event", get_record):
@@ -253,6 +321,88 @@ def load_transcript(rec_dir) -> list[dict]:
     return out
 
 
+def record_dir(root, rec_id: str) -> Path:
+    """id → 目录（校验格式，防路径穿越）。不存在抛 FileNotFoundError。"""
+    if not rec_id or not _ID_RE.match(rec_id):
+        raise FileNotFoundError(rec_id)
+    d = Path(root) / "records" / rec_id
+    if not (d / "meta.json").exists():
+        raise FileNotFoundError(rec_id)
+    return d
+
+
+def read_meta(rec_dir) -> dict:
+    meta = json.loads((Path(rec_dir) / "meta.json").read_text(encoding="utf-8"))
+    meta["_dir"] = str(rec_dir)
+    return meta
+
+
+def update_meta(rec_dir, **kw) -> dict:
+    d = Path(rec_dir)
+    with _io_lock:
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+        meta.update(kw)
+        _write_json(d / "meta.json", meta)
+    meta["_dir"] = str(d)
+    return meta
+
+
+def write_transcript(rec_dir, entries: list):
+    p = Path(rec_dir) / "transcript.jsonl"
+    text = "".join(json.dumps({k: e.get(k) for k in _ROW_KEYS}, ensure_ascii=False) + "\n" for e in entries)
+    with _io_lock:
+        _atomic_write(p, text)
+
+
+def update_entry(rec_dir, entry_id, **fields) -> dict | None:
+    """就地修改一条转录（纠错 / 标星）。返回修改后的条目。"""
+    with _io_lock:
+        tr = load_transcript(rec_dir)
+        hit = None
+        for e in tr:
+            if str(e.get("id")) == str(entry_id):
+                e.update(fields)
+                hit = e
+                break
+        if hit is None:
+            return None
+        write_transcript(rec_dir, tr)
+        update_meta(rec_dir, **_entry_stats(tr))
+    return hit
+
+
+def read_summary(rec_dir) -> str:
+    p = Path(rec_dir) / "summary.md"
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def write_summary(rec_dir, text: str):
+    _atomic_write(Path(rec_dir) / "summary.md", text)
+
+
+def delete_record(rec_dir):
+    shutil.rmtree(rec_dir, ignore_errors=True)
+
+
+def wav_duration(path) -> float:
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except (wave.Error, OSError, EOFError):
+        return 0.0
+
+
+def close_orphan(rec_dir) -> dict:
+    """上次异常退出的记录：按已落盘的音频/转录补齐时长与统计，状态改为待生成纪要。"""
+    d = Path(rec_dir)
+    meta = read_meta(d)
+    tr = load_transcript(d)
+    dur = max([wav_duration(d / s["wav"]) for s in meta.get("sources", [])] +
+              [float(e.get("t_end") or 0) for e in tr] + [0.0])
+    return update_meta(d, duration_s=round(dur, 1), summary_status="pending",
+                       **_entry_stats(tr))
+
+
 def find_orphans(root) -> list[dict]:
     """上次异常退出留下的、仍处于 recording 状态的记录。"""
     return [m for m in list_records(root) if m.get("summary_status") == "recording"]
@@ -283,33 +433,33 @@ def migrate_legacy_records(old_root, new_root) -> int:
 def rename_speaker(rec_dir, local_id: str, new_name: str):
     """把记录里某个 local_id（如「媒体·说话人2」）就地改成真名：重写 transcript + meta。"""
     d = Path(rec_dir)
-    tr = load_transcript(d)
-    for e in tr:
-        if e.get("speaker") == local_id:
-            e["speaker"] = new_name
-    with (d / "transcript.jsonl").open("w", encoding="utf-8") as f:
+    with _io_lock:
+        tr = load_transcript(d)
         for e in tr:
-            f.write(json.dumps({k: e.get(k) for k in _ROW_KEYS}, ensure_ascii=False) + "\n")
-    mp = d / "meta.json"
-    if mp.exists():
+            if e.get("speaker") == local_id:
+                e["speaker"] = new_name
+        write_transcript(d, tr)
+        mp = d / "meta.json"
+        if not mp.exists():
+            return
         try:
             meta = json.loads(mp.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return
         spks = meta.get("speakers", [])
-        for s in spks:
-            if s.get("local_id") == local_id:
-                s["name"] = new_name
+        for sp in spks:
+            if sp.get("local_id") == local_id:
+                sp["name"] = new_name
                 break
         else:
             spks.append({"local_id": local_id, "name": new_name})
         meta["speakers"] = spks
-        mp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_json(mp, meta)
 
 
 # ---------------------------- 导出 ----------------------------
 
-_LANG_CN = {"zh": "中文", "en": "英文", "ja": "日文"}
+_LANG_CN = {"zh": "中文", "en": "英文", "ja": "日文", "ko": "韩文"}
 
 
 def _ts_srt(sec: float) -> str:
@@ -325,7 +475,8 @@ def to_markdown(meta: dict, transcript: list, summary: str = "") -> str:
     if summary:
         lines += [summary, "\n---\n", "## 转录\n"]
     for e in transcript:
-        lines.append(f"**[{e.get('speaker','')}] ({_LANG_CN.get(e.get('lang'),'')})** {e.get('source','')}")
+        star = " ★" if e.get("starred") else ""
+        lines.append(f"**[{e.get('speaker','')}] ({_LANG_CN.get(e.get('lang'),'')}){star}** {e.get('source','')}")
         if e.get("translation"):
             lines.append(f"> {e['translation']}")
         lines.append("")
@@ -348,7 +499,29 @@ def to_srt(transcript: list) -> str:
 
 
 def to_vtt(transcript: list) -> str:
-    return "WEBVTT\n\n" + to_srt(transcript).replace(",", ".")
+    out = ["WEBVTT", ""]
+    for e in transcript:
+        ts, te = e.get("t_start"), e.get("t_end")
+        if ts is None or te is None:
+            continue
+        body = e.get("source", "")
+        if e.get("translation"):
+            body += "\n" + e["translation"]
+        out.append(f"{_ts_srt(ts).replace(',', '.')} --> {_ts_srt(te).replace(',', '.')}\n{body}\n")
+    return "\n".join(out)
+
+
+def to_txt(meta: dict, transcript: list, summary: str = "") -> str:
+    lines = [meta.get("title") or meta.get("id", ""), meta.get("created_at", ""), ""]
+    if summary:
+        lines += [summary.strip(), "", "—— 转录 ——", ""]
+    for e in transcript:
+        t = e.get("t_start")
+        ts = f"{int(t // 60):02d}:{int(t % 60):02d} " if t is not None else ""
+        lines.append(f"{ts}[{e.get('speaker', '')}] {e.get('source', '')}")
+        if e.get("translation"):
+            lines.append(f"    {e['translation']}")
+    return "\n".join(lines) + "\n"
 
 
 def to_docx(meta: dict, transcript: list, summary: str, path):
@@ -357,9 +530,18 @@ def to_docx(meta: dict, transcript: list, summary: str, path):
     doc.add_heading(meta.get("title") or meta.get("id"), level=0)
     doc.add_paragraph(f"{meta.get('created_at','')} · {meta.get('duration_s',0)}s")
     if summary:
-        doc.add_heading("会议总结", level=1)
+        doc.add_heading("会议纪要", level=1)
         for ln in summary.splitlines():
-            doc.add_paragraph(ln)
+            st = ln.strip()
+            if not st:
+                continue
+            if st.startswith("#"):
+                level = min(3, len(st) - len(st.lstrip("#")) + 1)
+                doc.add_heading(st.lstrip("# ").strip(), level=level)
+            elif st[:2] in ("- ", "* "):
+                doc.add_paragraph(st[2:].replace("**", ""), style="List Bullet")
+            else:
+                doc.add_paragraph(st.replace("**", ""))
     doc.add_heading("转录", level=1)
     for e in transcript:
         p = doc.add_paragraph()

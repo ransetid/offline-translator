@@ -15,8 +15,8 @@ py2app 打包脚本（把本工具打成 macOS .app）。
 """
 from setuptools import setup
 
-APP = ["translator_v3.py"]
-DATA_FILES = ["DESIGN.md", "records.py"]
+APP = ["main.py"]
+DATA_FILES = ["DESIGN.md"]
 
 OPTIONS = {
     "argv_emulation": False,
@@ -24,7 +24,7 @@ OPTIONS = {
         "CFBundleName": "LiveTranslator",
         "CFBundleDisplayName": "本地实时翻译",
         "CFBundleIdentifier": "com.livetranslator.app",
-        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleShortVersionString": "4.0.0",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
         # 麦克风要用途说明（否则申请权限会崩）；屏幕录制无 plist key，运行时 TCC 授权
@@ -35,8 +35,9 @@ OPTIONS = {
         "objc", "Foundation", "AppKit", "Quartz", "ScreenCaptureKit", "CoreMedia",
         "numpy", "scipy", "sounddevice", "requests", "urllib3", "certifi",
         "charset_normalizer", "idna", "sherpa_onnx", "av", "huggingface_hub",
+        "webview", "livetranslator", "WebKit",
     ],
-    "includes": ["queue", "json", "wave", "records"],
+    "includes": ["queue", "json", "wave"],
     "excludes": ["tkinter.test", "test", "pytest"],
 }
 

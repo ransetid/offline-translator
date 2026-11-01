@@ -1,0 +1,20 @@
+# 核心
+numpy
+scipy
+requests
+sounddevice
+pywebview>=5.0          # 原生窗口外壳（WKWebView）；缺了会自动改用浏览器打开界面
+# macOS 系统声音 / 权限
+pyobjc-core
+pyobjc-framework-Cocoa
+pyobjc-framework-Quartz
+pyobjc-framework-WebKit
+pyobjc-framework-ScreenCaptureKit
+pyobjc-framework-CoreMedia
+pyobjc-framework-libdispatch
+# 可选能力
+sherpa-onnx             # 说话人区分（CAM++ 声纹）
+av                      # 导入任意音/视频（PyAV）
+python-docx             # 导出 Word
+huggingface_hub
+mlx-lm                  # 内置翻译模型兜底（Apple Silicon）
