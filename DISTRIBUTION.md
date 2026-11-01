@@ -19,6 +19,7 @@
 优点：不折腾原生库打包，稳。缺点：是「双击脚本」不是图标式 .app，且带一个 .venv 文件夹。
 
 ## 分发方式二：打成 .app（py2app，需调试）
+入口是 `main.py`（等价于 `python -m livetranslator`）。
 真正的图标式 `.app`：
 ```bash
 .venv/bin/pip install py2app
@@ -33,7 +34,7 @@
 - **av (PyAV)**：捆着 ffmpeg 的 dylib，体积大、易漏。仅「导入文件」用到；实在搞不定可先把导入功能
   做成可选、打包时不带 av。
 - **sherpa-onnx**：带 onnxruntime dylib，同理按报错补 frameworks。
-- **Tcl/Tk**：py2app 一般会自动带；界面空白多半是 Tk 没打进去。
+- **pywebview / WebKit**：界面是 `livetranslator/ui/` 下的静态文件，随 `livetranslator` 包一起拷贝；窗口空白多半是 `pyobjc-framework-WebKit` 没打进去。
 - **self-host LLM 起不来**：.app 里 `sys.executable` 是 app 二进制，`python -m mlx_lm.server` 跑不了。
   分发场景**依赖 oMLX**，不要指望 self-host（`self_host_llm` 影响不大，因为优先用外部 oMLX）。
 - 首启崩溃：`dist/LiveTranslator.app/Contents/MacOS/LiveTranslator` 在终端里直接跑，看报错最快。

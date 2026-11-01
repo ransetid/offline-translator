@@ -1,134 +1,93 @@
----
-version: alpha
-name: LiveTranslator
-description: 本地离线双语会议助手的视觉设计系统（暗色、专注、可信）
-colors:
-  bg: "#14151c"
-  surface: "#1b1d26"
-  panel: "#10121a"
-  hairline: "#2b2e3c"
-  text: "#e7e9f2"
-  text-dim: "#a6abbd"
-  text-muted: "#6b7085"
-  accent: "#6fd6a8"
-  accent-press: "#59c295"
-  lang-zh: "#93e6b0"
-  lang-en: "#8fb8ff"
-  lang-ja: "#f2d38a"
-  peak: "#f2849c"
-  subtitle-fg: "#ffffff"
-  subtitle-dim: "#b9bfd4"
-typography:
-  display:
-    fontFamily: PingFang SC
-    fontSize: 22px
-    fontWeight: 600
-    lineHeight: 1.35
-  title:
-    fontFamily: PingFang SC
-    fontSize: 13px
-    fontWeight: 600
-    letterSpacing: 0.02em
-  body:
-    fontFamily: PingFang SC
-    fontSize: 15px
-    fontWeight: 400
-    lineHeight: 1.55
-  body-strong:
-    fontFamily: PingFang SC
-    fontSize: 15px
-    fontWeight: 600
-    lineHeight: 1.55
-  meta:
-    fontFamily: PingFang SC
-    fontSize: 11px
-    fontWeight: 400
-  caption:
-    fontFamily: PingFang SC
-    fontSize: 10px
-    fontWeight: 400
-spacing:
-  xs: 4px
-  sm: 8px
-  md: 12px
-  lg: 16px
-  xl: 24px
-rounded:
-  sm: 6px
-  md: 10px
-  lg: 14px
-components:
-  button:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.md}"
-  button-primary:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.bg}"
-    rounded: "{rounded.md}"
-  column-card:
-    backgroundColor: "{colors.surface}"
-    rounded: "{rounded.lg}"
-  meter-track:
-    backgroundColor: "{colors.hairline}"
-  meter-fill:
-    backgroundColor: "{colors.accent}"
-  live-dot:
-    backgroundColor: "{colors.accent}"
-  subtitle-bar:
-    backgroundColor: "{colors.bg}"
-    textColor: "{colors.subtitle-fg}"
+# LiveTranslator 设计系统 · v4
+
+> 夜里的广播字幕间：哑光近黑的台面，只有一盏「正在直播」的信号灯亮着；屏幕上的双语字幕排得像读物一样干净。
+> **安静、精确、可信**——它是干活的工具，内容（双语文字）永远是主角。
+
+唯一真源：`livetranslator/ui/tokens.css`（变量）→ `app.css`（组件）→ `app.js`（行为）。
+改视觉先改 token，不在组件里写死色值。
+
 ---
 
-## Overview
+## 1. 审计：v3（Tk）→ v4（WebView）
 
-想象一间**夜里的广播字幕间**：哑光近黑的台面，只有一盏代表「正在直播」的信号灯亮着，
-操作员面前是一块把双语字幕排得像读物一样干净的屏幕。这就是这个 app 该有的气质——
-**安静、精确、可信**。它是干活的工具，不是要取悦你的展示品。因为它主打「完全离线、
-音频不出本机」，界面更要传达**克制与稳重**，而不是花哨。少即是多：每个元素都要挣得它的像素。
+| 维度 | v3 现状 | 问题 | v4 处理 |
+|---|---|---|---|
+| Token 覆盖 | 色值写在 `translator_v3.py` 常量里，圆角/间距只在文档里 | Tk 做不出圆角、动效、半透明，设计意图落不了地 | 全部 CSS 变量；深/浅两套主题 |
+| 层级 | 字号 4 档，用颜色区分原文/译文 | 译文着「目标语言色」，在中文栏里蓝、英文栏里绿，彩色多 | 靠**字重 + 明度**：译文白加粗、原文灰常规；语言色只剩小标签 |
+| 控件状态 | 按钮只有 default/active | 无 focus、disabled、loading | 每个组件定义全状态（见 §3） |
+| 反馈 | 状态栏一行文字被反复覆盖 | 错误一闪而过，后台任务看不到进度 | Toast + 任务托盘（带进度/取消） |
+| 可达性 | 无键盘路径 | — | 全局快捷键、焦点环、对话框焦点陷阱、aria 标注、AA 对比度 |
+| 启动 | 后端没起直接 `sys.exit(1)` | 用户看不到界面也不知道怎么修 | 永远能打开；左下角状态灯 + 体检清单一键修复 |
 
-## Colors
+**评分**：v3 ≈ 52/100 → v4 目标 ≥ 85/100（token 化 100%、组件状态完整、文档齐）。
 
-近黑的蓝灰做底（`bg`/`surface`/`panel` 三级递深），营造字幕间的沉静。**只有一个强调色**
-`accent`（柔和薄荷绿）——用于「正在录制」信号点、开始键、电平表。语言色（中/英/日）克制而不刺眼，
-只用来区分栏目与译文，不抢注意力。`peak` 洋红只在电平接近削波时短暂出现，是警示不是装饰。
-禁止再引入第二个主色；要更多层次就调明度，不要加色相。
+---
 
-## Typography
+## 2. Tokens
 
-一套字号阶梯，靠**字重和字号**建立层级，而不是靠颜色。译文是主角——用 `body-strong`（加粗、
-最亮 `text`）；原文是配角——用 `body`、偏暗 `text-dim`。时间戳/说话人用 `meta`，控件小标签用
-`caption`（`text-muted`）。字幕模式用 `display`。中文西文统一 PingFang SC，避免混排跳动。
+### 颜色（深色为默认）
 
-## Layout
+| Token | 深色 | 浅色 | 用途 |
+|---|---|---|---|
+| `--bg` / `--bg-rail` | #0f1016 / #0b0c11 | #f5f5f7 / #ececf0 | 应用底 / 导航栏 |
+| `--surface-1…4` | #15161e → #2c3040 | #fafafc → #e5e7ee | 面板 → 卡片 → 悬停/输入 → 按下/选中（**越靠前越亮**） |
+| `--line` / `--line-strong` | #262938 / #353a4c | #e3e4ea / #d2d4dd | 发丝线 / 输入框边 |
+| `--text` / `-2` / `-3` | #eceef5 / #a7acbf / #8a8fa5 | #16171d / #565b6e / #686d80 | 译文 / 原文 / 标签（均 ≥ 4.5:1） |
+| `--accent` | **#6fd6a8** | #0e7a4f | 唯一强调色：录制、主按钮、电平、焦点 |
+| `--danger` / `--warn` | #f2849c / #f2c97a | #d23f63 / #9a6212 | 削波、失败、删除 / 标记★、待处理 |
+| `--lang-zh/en/ja/ko` | 琥珀/蓝/粉/紫 | 加深版 | **只**用于语种小标签 |
+| `--spk-1…6` | 低饱和 6 色 | 加深版 | 说话人名（麦克风固定 spk-1，其余按名字哈希） |
 
-垂直节奏用 4/8/12/16/24 的间距阶梯，别用随手的数字。三段式：顶部操作条（含开始键 + 状态）、
-左侧窄的音源控制台、右侧双语阅读区。区块之间用 `hairline` 细线或 `surface` 底色区分，
-不用粗边框。阅读区留白要够，让双语文字能像书页一样呼吸。
+规则：只有一个强调色；要更多层次就调明度，不加色相；不用渐变（唯一例外：★标记行的 warn 渐隐底）。
 
-## Elevation & Depth
+### 字体 / 间距 / 圆角 / 动效
 
-不用投影（暗色界面里投影是噪音）。用**明度分层**表达深浅：`panel` < `bg` < `surface`
-（越靠前越亮一点）。卡片靠 `surface` 底色和圆角浮起，不靠阴影。
+- 字体：`-apple-system, PingFang SC…`；数字一律 `tabular-nums`，计时器用 `--font-mono`。
+- 字号：11 标签 · 12 元信息 · 13 控件 · 15 原文 · **16 译文** · 17 区块标题 · 22 页面标题 · 28 欢迎。阅读区可整体缩放 `--read-scale`（设置 → 外观）。
+- 间距：4 基（4/8/12/16/20/24/32/40）。
+- 圆角：4 / 6 控件 / 10 卡片内块 / 14 卡片 / 20 对话框 / pill。
+- 高度：暗色不用投影分层；**只有浮层**（菜单、对话框、toast、任务卡）有投影。
+- 动效：120ms（悬停）/ 200ms（状态切换）/ 320ms（新条目上浮）；`cubic-bezier(.2,.8,.2,1)`；尊重「减少动态效果」。
 
-## Shapes
+---
 
-统一圆角：小控件 `rounded.sm`，卡片 `rounded.lg`。（Tkinter 原生控件圆角能力有限，
-这些 token 是设计意图，也供未来导出/重写时用；当前实现尽量以底色块和留白逼近。）
+## 3. 组件
 
-## Components
+| 组件 | 变体 | 状态 | 说明 |
+|---|---|---|---|
+| **RecordButton** `.rec-btn` | idle（薄荷实底）/ recording（暗底+红方块+薄荷描边） | hover, busy | 全局唯一主操作，⌘R |
+| **Button** `.btn` | default / primary / ghost / outline / danger；sm / lg / icon | hover, active, disabled, focus-visible | 一屏最多一个 primary |
+| **SourceCard** `.src-card` | mic / media | off（降透明）, speaking（薄荷边） | 开关 + 电平（带阈值竖线）+ 音量；媒体卡含来源选择、说话人开关、授权提示 |
+| **Meter** `.meter` | — | idle, hot（>90% 转 danger）, off | rAF 驱动，不重建 DOM |
+| **Entry** `.entry` | timeline / column / record（时间可点击跳播） | pending（翻译中）, streaming（光标）, error, starred, editing, playing | 原文在上（小、灰、带语种标签），译文在下（大、白、粗） |
+| **LiveStrip** `.live-strip` | — | idle / on | 说话中的临时识别；波形跟随电平 |
+| **Chip** `.chip` | ok / warn / bad / lang | — | 状态与语种 |
+| **Switch / Seg / Range / Input / Select** | — | hover, focus, invalid | 统一 32px 高 |
+| **Callout** | info / warn / bad / ok | — | 可内嵌操作按钮（「去授权」「恢复并生成纪要」） |
+| **Toast** | info / ok / warn / error | in / out | 顶部居中，可带一个动作（「查看」） |
+| **JobCard** | — | running（确定/不确定进度）, failed | 右下托盘；导入/重识别可取消 |
+| **Modal / Menu** | default / wide | — | Esc 关闭、焦点陷阱、关闭后焦点回到触发点 |
+| **Player** | 单/多音轨 | playing / paused | 每路音源一条 wav，`offset` 对齐会议时间轴；点句子跳到对应音轨 |
 
-- **button**：暗底扁平，无原生高光；hover 略提亮。主操作（开始）用 `button-primary` 薄荷底、深色字。
-- **column-card**：双语栏用 `surface` 卡片，标题做成小胶囊（语言色文字 + 更暗底）。
-- **meter**：细横条，`hairline` 轨道 + `accent` 填充，接近满格转 `peak`。空闲也显示但更暗。
-- **live-dot**：录制中在状态区显示一个 `accent` 圆点 +「录制中」。
-- **subtitle-bar**：底部半透明条，译文 `display` 最亮，原文 `subtitle-dim` 小字在下。
+可达性底线：所有图标按钮有 `title/aria-label`；`:focus-visible` 双环；Space/Enter 不被全局快捷键抢走；WCAG AA 对比度。
 
-## Do's and Don'ts
+---
 
-- ✅ 只用一个强调色（accent）；层级靠字重/明度/间距。
-- ✅ 留白优先；宁可空，不要塞。
-- ✅ 语言色只用于区分与译文，克制使用。
-- ❌ 不加第二主色、不加渐变、不加投影、不加图标堆砌。
-- ❌ 不用粗边框分隔；用细线或底色。
-- ❌ 不让控件比内容更抢眼——内容（双语文字）永远是主角。
+## 4. 模式（Patterns）
+
+- **永远能打开**：后端离线 → 状态灯红 + 控制台提示 + 体检清单；仍可「只录音」，事后在记录库「从录音重新识别」。
+- **先出原文，再流译文**：临时稿在底部实时条 → 定稿进入列表 → 译文逐字流出（光标）。
+- **自动跟随但不抢滚动**：在底部时跟随；用户往上翻则停，出现「N 条新内容」胶囊。
+- **长任务后台化**：结束会议立即可开下一场；纪要/导入/恢复都在任务托盘里，完成 toast 带「查看」。
+- **草稿 + 保存条**：设置、术语表编辑进草稿，底部保存条出现；外观类设置即时生效。
+- **破坏性操作二次确认**：删除、重新识别（会覆盖纠错）用 danger 确认框写清后果。
+
+## 5. Do / Don't
+
+| ✅ Do | ❌ Don't |
+|---|---|
+| 只用 `--accent` 表示「直播/主操作」 | 加第二个主色、渐变、装饰性投影 |
+| 层级靠字重、明度、间距 | 靠颜色区分原文与译文 |
+| 改视觉先改 token | 在组件里写死色值 / 随手间距 |
+| 控件安静，内容最亮 | 让按钮比双语文字更抢眼 |
+| 每个异步操作都有反馈（toast / 进度 / 内联错误） | 静默失败、只 print 到终端 |
